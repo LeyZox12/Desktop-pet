@@ -66,13 +66,14 @@ void updatePetWindows()
 }
 
 BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
-	if (GetTopWindow(hwnd) == 0 || !IsWindowVisible(hwnd)) return TRUE;
-
+	LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
+	if (!IsWindowVisible(hwnd) ||/* IsIconic(hwnd) ||*/ GetTopWindow(hwnd) == 0 || !GetAncestor(hwnd, GA_ROOTOWNER) || style & WS_EX_TOOLWINDOW || !(style & WS_EX_APPWINDOW) ) return TRUE;
     RECT rect;
     GetWindowRect(hwnd, &rect);
-	if(rect.right < 0) return TRUE;
 	char title[256];
 	GetWindowTextA(hwnd, title, 256);
-	pet.windows.push_back(rect);	
+	if(strlen(title) == 0 || rect.left <0 || rect.right - rect.left <=0 || rect.left > 10000) return true;
+	cout << title << endl << "x:" << rect.left << ",y:" << rect.top <<",w:" << rect.right - rect.left <<",h:" << rect.bottom - rect.top << endl << endl;
+	pet.windows.push_back(rect); // for my desktop pet to be able to climb onto windows	
     return TRUE;
 }

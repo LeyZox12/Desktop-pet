@@ -27,7 +27,7 @@ struct Pet
 		screenSize = vec2(modes[0].size.x, modes[0].size.y);
 		LONG_PTR style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
 		style |= WS_EX_LAYERED;
-		style |= WS_ICONIC;
+		style |= WS_EX_TOPMOST;
 		SetWindowLongPtr(hwnd, GWL_EXSTYLE,style);
 		style = GetWindowLongPtr(hwnd, GWL_STYLE);
 		style &= ~WS_BORDER;
@@ -35,6 +35,7 @@ struct Pet
 		style &= ~WS_THICKFRAME;
 		SetWindowLongPtr(hwnd, GWL_STYLE, style);
 		SetLayeredWindowAttributes(hwnd, RGB(255, 0, 255), 0, LWA_COLORKEY);    
+		SetWindowPos(hwnd, HWND_TOPMOST, pos.x, pos.y, 500, 500, 0); 
 		//------------------SPRITE INIT----------------------------
 		ifstream file("init.dat");
 		if(file.good())
@@ -76,17 +77,17 @@ struct Pet
 				
 			ui.buttons[2].buttonNameStr = "follow:" + str;
 		}, "follow: false");
-		ui.addButton(vec2(10, 70), vec2(90, 60), [this](){windowOpen = false;}, "climb");
+		ui.addButton(vec2(10, 70), vec2(90, 60), [this](){windowClimbIndex = rand()%windows.size();}, "climb");
 		ui.addButton(vec2(10, 130), vec2(90, 60), [this](){jump();}, "jump");
-		ui.addButton(vec2(10, 190), vec2(50, 50), [this](){windowOpen = false;}, "x");
+		ui.addButton(vec2(10, 190), vec2(50, 50), [this](){pool.push_back(async([this](){closeWindow();}));}, "x");
 	}
 	
 	void drag(vec2 mousePos, float dt)
 	{
+		if(windowOpen)return;
 		sprite.setScale({1, 1});
 		mode = Mode::DRAG;
 		angVel *= 0.95;
-		if(windowOpen)return;
 		float diff;
 		diff = pos.x - mousePos.x; 
 		angVel -= (diff + window.getSize().x * 0.5f) * 0.01f;
@@ -130,9 +131,21 @@ struct Pet
 
 	void onStopDrag()
 	{
+		if(windowOpen) return;
 		mode = Mode::IDLE;
 		sprite.setRotation(degrees(0));
 	}	
+
+	void doSomething()
+	{
+		this_thread::sleep_for(chrono::milliseconds(1000+rand()%5000));
+		cout << "bro did something\n"; 
+		switch(mode)
+		{
+			case(Mode::IDLE):
+			break;	
+		}
+	}
 
 	void jump()
 	{
@@ -163,6 +176,81 @@ struct Pet
 		}
 	}
 
+	void updatePhysics(float dt)
+	{
+		if(windowOpen)return;
+		float halfWin = window.getSize().x * 0.5f;
+		float halfSprite = sprite.getSize().x * 0.5f;
+		int yDiff = pos.y - oldPos.y;
+		int xDiff = pos.x - oldPos.x;
+		vec2 size = sprite.getSize();
+		sprite.setOrigin({size.x * 0.5f, size.y * 0.5f});
+		vec2 updated = pos * 2.f - oldPos + vel * dt * dt;
+		oldPos = pos;
+		pos = updated;
+		if(yDiff > 3 && xDiff < yDiff) 
+		{
+			sprite.setScale({xDiff > 0 ? 1 : -1, 1});
+			sprite.setRotation(degrees(0));
+			state = 2;
+			animating = true;
+			animationEndTime = clock() + 10;
+		}
+		else if(yDiff < -3 && xDiff > yDiff)
+		{
+			sprite.setRotation(degrees(0));
+			sprite.setScale({1, 1});
+			state = 4;
+			animating = true;
+			animationEndTime = clock() + 10;
+		}
+		else if(xDiff > 3)
+		{
+			state = 2;
+			sprite.setRotation(degrees(90));
+			sprite.setScale({-1, -1});
+			animating = true;
+			animationEndTime = clock() + 10;
+		}
+		else if(xDiff < -3)
+		{
+			state = 2;
+			sprite.setRotation(degrees(90));
+			sprite.setScale({-1, 1});
+			animating = true;
+			animationEndTime = clock() + 10;
+
+		}
+		vel.x *= 0.9;
+		if(pos.x < halfSprite - halfWin)
+		{
+			pos.x = halfSprite - halfWin;
+			windowClimbIndex = Side::LEFT;
+			mode = Mode::CLIMB;
+			pool.push_back(async([this](){onWallHit();}));
+		}
+		else if(pos.x > screenSize.x - halfWin - halfSprite)
+		{
+			pos.x = screenSize.x - halfWin - halfSprite;
+			windowClimbIndex = Side::RIGHT;
+			mode = Mode::CLIMB;
+			pool.push_back(async([this](){onWallHit();}));
+		}
+		if(pos.y + size.y > screenSize.y - hotbarOffset)
+		{
+			if(yDiff >= 3)
+			{
+				state = 3;
+				animationEndTime = clock() + 1000;
+				animating = true;
+			}
+			pos.y = screenSize.y - size.y - hotbarOffset;
+			vel.y = 0;
+			vel.x = (oldPos.x - pos.x) * FRICTION;
+		}
+		vel.y += 9.8;
+	}
+
 	void update(vec2 mousePos, float dt)
 	{
 		float halfWin = window.getSize().x * 0.5f;
@@ -176,6 +264,8 @@ struct Pet
 			break;
 			case(Mode::FOLLOWCUR):
 				vel.x += ((mousePos.x - halfWin - pos.x) < 0 ? -1 : 1) * moveSpeed;
+				updatePhysics(dt);
+				break;
 			case(Mode::IDLE):
 			{
 				if(animating && clock() > animationEndTime)
@@ -185,104 +275,48 @@ struct Pet
 					animating = false;
 					state = 0;
 				}
-				vec2 size = sprite.getSize();
-				sprite.setOrigin({size.x * 0.5f, size.y * 0.5f});
-				vec2 updated = pos * 2.f - oldPos + vel * dt * dt;
-				oldPos = pos;
-				if(!windowOpen)
-					pos = updated;
-				if(yDiff > 3 && xDiff < yDiff) 
-				{
-					sprite.setScale({1, 1});
-					state = 2;
-					animating = true;
-					animationEndTime = clock() + 10;
-				}
-				else if(yDiff < -3 && xDiff > yDiff)
-				{
-				cout << yDiff << endl;
-					sprite.setScale({1, 1});
-					state = 4;
-					animating = true;
-					animationEndTime = clock() + 10;
-				}
-				else if(xDiff > 3)
-				{
-					state = 2;
-					sprite.setRotation(degrees(90));
-					sprite.setScale({-1, -1});
-					animating = true;
-					animationEndTime = clock() + 10;
-				}
-				else if(xDiff < -3)
-				{
-					state = 2;
-					sprite.setRotation(degrees(90));
-					sprite.setScale({-1, 1});
-					animating = true;
-					animationEndTime = clock() + 10;
-
-				}
-				vel.x *= 0.9;
-				if(pos.x < halfSprite - halfWin)
-				{
-					pos.x = halfSprite - halfWin;
-					windowClimbIndex = Side::LEFT;
-					mode = Mode::CLIMB;
-					pool.push_back(async([this](){onWallHit();}));
-				}
-				else if(pos.x > screenSize.x - halfWin - halfSprite)
-				{
-					pos.x = screenSize.x - halfWin - halfSprite;
-					windowClimbIndex = Side::RIGHT;
-					mode = Mode::CLIMB;
-					pool.push_back(async([this](){onWallHit();}));
-				}
-				if(pos.y + size.y > screenSize.y - hotbarOffset)
-				{
-					if(yDiff > 3)
-					{
-						state = 3;
-						animationEndTime = clock() + 1000;
-						animating = true;
-					}
-					pos.y = screenSize.y - size.y - hotbarOffset;
-					vel.y = 0;
-					vel.x = (oldPos.x - pos.x) * 200.f;
-				}
-				vel.y += 9.8;
+				updatePhysics(dt);
 			}	
 			break;
 			case(Mode::CLIMB):
 			{
-				int side = windowClimbIndex == Side::LEFT ? 1 : -1;
-				if(state != 5)
+				if(windowClimbIndex < 0)
 				{
-					if(abs(xDiff) > 3 && !animating)
+					int side = windowClimbIndex == Side::LEFT ? 1 : -1;
+					if(state != 5)
 					{
-						state = 3;
-						animationEndTime = clock() + 1000;
-						animating = true;
+						if(abs(xDiff) > 3 && !animating)
+						{
+							state = 3;
+							animationEndTime = clock() + 1000;
+							animating = true;
+						}
+						else if(!animating)
+						{
+							state = 5;
+							sprite.setScale({side, 1});
+							sprite.setRotation(degrees(0));
+						}
 					}
-					else if(!animating)
+					if(animating && clock() > animationEndTime)
 					{
-						state = 5;
 						sprite.setScale({side, 1});
 						sprite.setRotation(degrees(0));
+						animating = false;
+						state = 5;
 					}
 				}
-				if(animating && clock() > animationEndTime)
+				else
 				{
-					sprite.setScale({side, 1});
-					sprite.setRotation(degrees(0));
-					animating = false;
-					state = 5;
+					RECT& rect = windows[windowClimbIndex];
+					int side = abs(pos.x - rect.left) < abs(pos.x - rect.right) ? -1 : 1;
+					
 				}
 
 			}
 			break;
 		}
-		SetWindowPos(hwnd, NULL, pos.x, pos.y, 500, 500, 0);
+		SetWindowPos(hwnd, NULL, pos.x, pos.y, 500, 500, 0); 
 		
 		//-----------------clearing thread pool--------------------
 		vector<int> toRemove;
@@ -303,6 +337,12 @@ struct Pet
 		window.display();
 	}
 	
+	void closeWindow()
+	{
+		this_thread::sleep_for(1500ms);//timer to prevent instant grab after clicking button
+		windowOpen = false;
+	}
+
 	void onWallHit()
 	{
 		animating = false;
@@ -311,6 +351,8 @@ struct Pet
 		sprite.setRotation(degrees(90));
 		this_thread::sleep_for(500ms);
 		Mode::CLIMB;
+		this_thread::sleep_for(chrono::milliseconds(1500+rand()%1000));
+		jump();
 	}
 	
 	enum Mode
@@ -335,12 +377,13 @@ struct Pet
 	
 	clock_t animationEndTime;
 	bool animating = false;
-	float moveSpeed = 200;
+	float moveSpeed = 2000;
 	bool windowOpen = false;
 	vector<RECT> windows;
 	int hotbarOffset;
 	int squareSize;
 	const float JUMP_FORCE = 5;
+	const float FRICTION = 600;
 	float angVel = 0;
 	vec2 oldPos;
 	UIutils ui;
